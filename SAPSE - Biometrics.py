@@ -13,6 +13,8 @@ import time
 import sys
 import json
 import pygame  # Importar pygame para reproducir sonidos
+import shutil
+
 
 # Importaciones para generar PDFs
 from reportlab.lib import colors
@@ -298,6 +300,20 @@ def buscar_datos(event=None):
     
     entrada = entry.get().strip()
     
+    # Obtener la estación seleccionada
+    estacion_seleccionada = selected_station.get()
+    print(f"Estación seleccionada: {estacion_seleccionada}")  # Depuración
+
+    if not estacion_seleccionada or estacion_seleccionada == "Sin datos":
+        messagebox.showerror("Error", "Seleccione una estación antes de buscar.")
+        return
+    
+    ruta_estacion = os.path.join("dats", estacion_seleccionada)
+    
+    if not os.path.exists(ruta_estacion) or not os.path.isdir(ruta_estacion):
+        messagebox.showerror("Error", f"No se encontró la carpeta de la estación: {estacion_seleccionada}")
+        return
+    
     # Limpiar el texto predeterminado si está presente
     if entrada == "Escriba DNI/Nombre/Apellido del componente...":
         # Enfocar el campo de entrada para que el usuario pueda escribir
@@ -373,19 +389,19 @@ def buscar_datos(event=None):
             root.after(1000, lambda: setattr(sys.modules[__name__], 'mensaje_error_mostrado', False))
         return
 
-    dat_files = [f for f in os.listdir() if f.endswith('.dat')]
+    dat_files = [f for f in os.listdir(ruta_estacion) if f.endswith('.dat')]
     if not dat_files:
         try:
             mensaje_error_mostrado = True
             ultimo_tiempo_error = tiempo_actual
-            messagebox.showerror("Error", "No se detectaron archivos biometricos .dat en el directorio.")
+            messagebox.showerror("Error", f"No se detectaron archivos .dat en la carpeta de {estacion_seleccionada}.")
         finally:
             # Restablecer la bandera después de mostrar el mensaje
             root.after(1000, lambda: setattr(sys.modules[__name__], 'mensaje_error_mostrado', False))
         return
 
-    archivo_datos = dat_files[0]
-    with open(archivo_datos, 'r', encoding='utf-8') as archivo_datos, open("tmp/coincidencias.txt", 'w', encoding='utf-8') as coincidencias_file:
+    archivo_datos_path = os.path.join(ruta_estacion, dat_files[0])
+    with open(archivo_datos_path, 'r', encoding='utf-8') as archivo_datos, open("tmp/coincidencias.txt", 'w', encoding='utf-8') as coincidencias_file:
         for linea in archivo_datos:
             dni = linea.strip().split('\t')[0]
             if dni in dnis_a_filtrar:
@@ -548,6 +564,22 @@ def guardar_pdf():
     except Exception as e:
         messagebox.showerror("Error", f"Ocurrió un error al guardar el PDF:\n{str(e)}")
 
+# Cargar nombres desde el JSON
+def cargar_nombres_estaciones(ruta_json):
+    try:
+        with open(ruta_json, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        return list(data.values())  # Extrae solo los nombres de estación
+    except Exception as e:
+        print(f"Error al cargar el JSON: {e}")
+        return ["Error al cargar"]  # Opción por defecto en caso de error
+
+# Ruta del archivo JSON
+ruta_json = "mapbio/mapbio.json"
+
+# Obtener lista de nombres de estaciones
+opciones_estaciones = cargar_nombres_estaciones(ruta_json)
+
 # Crear la ventana GUI con customtkinter
 class TkinterDnDApp(ctk.CTk, TkinterDnD.Tk):
     def __init__(self):
@@ -638,28 +670,47 @@ def mostrar_siguiente_mensaje():
     
 def arrastrar_archivo_dat(event):
     archivo = event.data
-    archivo = archivo.strip("{}")
-    if os.path.isfile(archivo) and archivo.endswith('.dat'):
-        # Eliminar todos los archivos .dat en la carpeta raíz
-        for file in os.listdir('.'):
-            if file.endswith('.dat'):
-                os.remove(file)
-        
-        # Copiar el nuevo archivo .dat a la carpeta raíz
-        destino = archivo.split("/")[-1]  # Nombre del archivo sin la ruta
-        with open(archivo, 'rb') as source_file:
-            with open(destino, 'wb') as dest_file:
-                dest_file.write(source_file.read())
+    archivo = archivo.strip("{}")  # Limpiar ruta recibida
 
-        messagebox.showinfo("Éxito", "Archivo .dat procesado correctamente!")
-        # Mostrar mensaje de éxito
+    if not os.path.isfile(archivo) or not archivo.endswith('.dat'):
+        messagebox.showerror("Error", "Solo se permiten archivos con la extensión .dat.")
+        return
+
+    # Cargar el mapeo desde mapbio.json
+    try:
+        with open("mapbio/mapbio.json", "r", encoding="utf-8") as file:
+            mapbio = json.load(file)
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudo cargar mapbio.json: {e}")
+        return
+
+    nombre_archivo = os.path.basename(archivo)
+
+    # Buscar la estación correspondiente en el mapeo
+    estacion_destino = mapbio.get(nombre_archivo, None)
+    
+    if not estacion_destino:
+        messagebox.showerror("Error", f"No se encontró una estación asociada a {nombre_archivo}.")
+        return
+
+    # Crear la carpeta si no existe
+    ruta_destino = os.path.join("dats", estacion_destino)
+    os.makedirs(ruta_destino, exist_ok=True)
+
+    # Mover el archivo a su carpeta correspondiente
+    destino_final = os.path.join(ruta_destino, nombre_archivo)
+    try:
+        shutil.move(archivo, destino_final)
+        messagebox.showinfo("Éxito", f"Archivo {nombre_archivo} movido a {ruta_destino} correctamente!")
+        
+        # Actualizar la UI
         entry.delete(0, "end")
-        entry.insert(0, 'Biometricos cargados con éxito! Ya puede buscar.')
+        entry.insert(0, 'Biométricos cargados con éxito! Ya puede buscar.')
 
         # Esperar 2 segundos y luego mostrar el siguiente mensaje
         root.after(1000, mostrar_siguiente_mensaje)
-    else:
-        messagebox.showerror("Error", "Solo se permiten archivos con la extensión .dat.")
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudo mover el archivo: {e}")
   
 # Crear un Frame para contener el Entry y el Canvas
 frame = ctk.CTkFrame(main_frame, width=400, height=120, fg_color="#121212")  # THEME FRAME BUSCADOR
@@ -931,6 +982,35 @@ guardar_pdf_btn = ctk.CTkButton(button_frame, text="| GUARDAR PDF |", command=gu
                                fg_color="#242424", hover_color="#19232b", text_color="#cacaca", border_width=0, border_color="#121212", corner_radius=5, width=120, height=30)
 guardar_pdf_btn.pack(pady=0, side="left", padx=5)
 
+# Frame contenedor para alinear los elementos
+dat_selector_container = ctk.CTkFrame(main_frame, fg_color="transparent")  
+dat_selector_container.pack(pady=0, padx=10, anchor="w")  # Ajusta a la izquierda
+
+# Texto a la izquierda
+dat_selector_text = ctk.CTkLabel(dat_selector_container, text=f"| Selección de estación:", 
+                                 font=load_custom_font_for_title(size=15, weight="bold"), 
+                                 text_color="#bababa", anchor="w")
+dat_selector_text.pack(side="left", padx=(40, 10))  # Espacio a la derecha
+
+# Frame a la derecha del texto
+dat_selector_frame = ctk.CTkFrame(dat_selector_container, width=300, corner_radius=0, fg_color="#121212")  
+dat_selector_frame.pack(side="left")  # Se alinea a la derecha del texto
+# Variable para almacenar la selección
+selected_station = ctk.StringVar(value=opciones_estaciones[0] if opciones_estaciones else "Sin estaciones cargadas", name="selected_station")
+
+# Menú desplegable en lugar del texto fijo
+dat_selector_dropdown = ctk.CTkOptionMenu(dat_selector_frame, 
+                                          values=opciones_estaciones, 
+                                          variable=selected_station, 
+                                          font=load_custom_font_for_title(size=12, weight="bold"),
+                                          fg_color="#181818",
+                                          button_color="#242424",
+                                          text_color="#92a4af",
+                                          dropdown_fg_color="#2E2E2E",
+                                          dropdown_text_color="#bababa",
+                                          width=210)
+dat_selector_dropdown.pack(pady=0, padx=10, anchor="w")
+
 # Área de texto para mostrar los resultados
 result_frame = ctk.CTkFrame(main_frame, fg_color="#121212", bg_color="#121212", width=400, height=320)
 result_frame.pack(fill="both", expand=True, padx=40, pady=10)
@@ -999,7 +1079,7 @@ def limpiar_texto_resultado(event):
 result_text._textbox.bind("<Button-1>", limpiar_texto_resultado)
 
 # Crear un Label encima del Frame
-label = ctk.CTkLabel(main_frame, text="S.A.P.S.E | Biometrics  V7.0 - 2025 (By SP Productions)", font=load_custom_font_for_title(size=11), text_color="#787878")
+label = ctk.CTkLabel(main_frame, text="S.A.P.S.E | Biometrics  V8.0 - 2025 (By SP Productions)", font=load_custom_font_for_title(size=11), text_color="#787878")
 label.pack(pady=(0, 10))  # Agrega un margen superior y evita solapamiento con el Frame
 
 # Función para manejar el cierre de la aplicación
